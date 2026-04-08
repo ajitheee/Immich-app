@@ -1,0 +1,58 @@
+# Build stage
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Copy package files
+COPY package.json pnpm-lock.yaml ./
+COPY packages/types/package.json ./packages/types/
+COPY packages/utils/package.json ./packages/utils/
+COPY packages/config/package.json ./packages/config/
+COPY apps/server/package.json ./apps/server/
+
+# Install pnpm
+RUN corepack enable && corepack prepare pnpm@8.15.0 --activate
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile
+
+# Copy source files
+COPY packages/types ./packages/types
+COPY packages/utils ./packages/utils
+COPY packages/config ./packages/config
+COPY apps/server ./apps/server
+COPY tsconfig.json ./
+COPY turbo.json ./
+
+# Build packages
+RUN pnpm --filter @immich/types build
+RUN pnpm --filter @immich/utils build
+RUN pnpm --filter @immich/config build
+
+# Build server
+RUN pnpm --filter @immich/server build
+
+# Production stage
+FROM node:20-alpine AS runner
+
+WORKDIR /app
+
+# Install production dependencies only
+COPY --from=builder /app/package.json ./
+COPY --from=builder /app/pnpm-lock.yaml ./
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/packages/types/dist ./packages/types/dist
+COPY --from=builder /app/packages/utils/dist ./packages/utils/dist
+COPY --from=builder /app/packages/config/dist ./packages/config/dist
+COPY --from=builder /app/apps/server/dist ./apps/server/dist
+COPY --from=builder /app/apps/server/package.json ./apps/server/package.json
+
+# Create data directory
+RUN mkdir -p /app/data/storage
+
+ENV NODE_ENV=production
+ENV PORT=3001
+
+EXPOSE 3001
+
+CMD ["node", "apps/server/dist/main.js"]
